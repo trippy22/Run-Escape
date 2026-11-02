@@ -17,38 +17,39 @@ go stale. Add anything that cost you time to work out.
 
 ## Where things are
 
-| Looking for                                           | Go to                                    |
-| ----------------------------------------------------- | ---------------------------------------- |
-| How the code is laid out, scripts, URL flags, hosting | `docs/DEVELOPMENT.md`                    |
-| The Windows app, its game updates, releases           | `docs/DEVELOPMENT.md`, Desktop           |
-| The app's main process and update code                | `desktop/`                               |
-| The release workflow                                  | `.github/workflows/release.yml`          |
-| What's in the game, map by map                        | `docs/GAMEPLAY.md`                       |
-| Getting it running, controls, cache version           | `README.md`                              |
-| What changed in each version                          | `CHANGELOG.md`                           |
-| How to add a weapon, enemy, map and so on             | `.claude/rules/adding-content.md`        |
-| Weapons, enemies, items, maps, shop (plain data)      | `src/game/content/`                      |
-| The game itself: tick, combat, spawning, levels       | `src/game/core/Sim.ts`                   |
-| Level up choices, and when a weapon can evolve        | `src/game/core/Upgrades.ts`              |
-| Evolution recipes, for the UI                         | `src/game/content/evolutions.ts`         |
-| Caskets and the inventory                             | `src/game/core/Loot.ts`                  |
-| Random events: who turns up, what they do             | `src/game/content/randomEvents.ts`       |
-| Save data and migrations                              | `src/game/core/save.ts`                  |
-| Run flow, camera, input, the HUD's data               | `src/game/client/GameClient.ts`          |
-| 3D actors, swooshes, hitsplats                        | `src/game/client/GameView.ts`            |
-| Touch screens: the stick, its buttons, phone layouts  | `docs/DEVELOPMENT.md`, Touch screens     |
-| The game on a phone's home screen (PWA)               | `docs/DEVELOPMENT.md`, Touch screens     |
-| React screens and the HUD                             | `src/game/ui/GameUi.tsx`                 |
-| Weapon stat lines on cards, pause and tooltips        | `src/game/content/weaponStats.ts`        |
-| How the player stands and runs with each weapon       | `src/game/content/stances.ts`            |
-| Stat names and types                                  | `src/game/content/stats.ts`, `types.ts`  |
-| Balance bot                                           | `scripts/game/simulate-run.ts`           |
-| Co-op: how it works, hosting its relay                | `docs/DEVELOPMENT.md` (Co-op)            |
-| Co-op relay server                                    | `server/coop-relay.mjs`                  |
-| Co-op lockstep and rooms; the lobby UI                | `src/game/client/coop/`, `ui/CoopScreen` |
-| Finding ids in the cache                              | `scripts/cache/`                         |
-| ScapeRune: making maps that aren't in OSRS            | `src/game/scaperune/CLAUDE.md`           |
-| What a frame costs, and what's culled                 | `docs/DEVELOPMENT.md`, `scripts/dev/`    |
+| Looking for                                           | Go to                                                                                      |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| How the code is laid out, scripts, URL flags, hosting | `docs/DEVELOPMENT.md`                                                                      |
+| The Windows app, its game updates, releases           | `docs/DEVELOPMENT.md`, Desktop                                                             |
+| The app's main process and update code                | `desktop/`                                                                                 |
+| The release workflow                                  | `.github/workflows/release.yml`                                                            |
+| What's in the game, map by map                        | `docs/GAMEPLAY.md`                                                                         |
+| Getting it running, controls, cache version           | `README.md`                                                                                |
+| What changed in each version                          | `CHANGELOG.md`                                                                             |
+| How to add a weapon, enemy, map and so on             | `.claude/rules/adding-content.md`                                                          |
+| Weapons, enemies, items, maps, shop (plain data)      | `src/game/content/`                                                                        |
+| The game itself: tick, combat, spawning, levels       | `src/game/core/Sim.ts`                                                                     |
+| Level up choices, and when a weapon can evolve        | `src/game/core/Upgrades.ts`                                                                |
+| Evolution recipes, for the UI                         | `src/game/content/evolutions.ts`                                                           |
+| Caskets and the inventory                             | `src/game/core/Loot.ts`                                                                    |
+| Random events: who turns up, what they do             | `src/game/content/randomEvents.ts`                                                         |
+| Save data and migrations                              | `src/game/core/save.ts`                                                                    |
+| Run flow, camera, input, the HUD's data               | `src/game/client/GameClient.ts`                                                            |
+| 3D actors, swooshes, hitsplats                        | `src/game/client/GameView.ts`                                                              |
+| Touch screens: the stick, its buttons, phone layouts  | `docs/DEVELOPMENT.md`, Touch screens                                                       |
+| The game on a phone's home screen (PWA)               | `docs/DEVELOPMENT.md`, Touch screens                                                       |
+| React screens and the HUD                             | `src/game/ui/GameUi.tsx`                                                                   |
+| Weapon stat lines on cards, pause and tooltips        | `src/game/content/weaponStats.ts`                                                          |
+| How the player stands and runs with each weapon       | `src/game/content/stances.ts`                                                              |
+| Stat names and types                                  | `src/game/content/stats.ts`, `types.ts`                                                    |
+| Balance bot                                           | `scripts/game/simulate-run.ts`                                                             |
+| Co-op: how it works, hosting its relay                | `docs/DEVELOPMENT.md` (Co-op)                                                              |
+| Co-op relay server                                    | `server/coop-relay.mjs`                                                                    |
+| Planned relay restarts, local operator commands       | `server/admin-cli.mjs`, `server/relay-admin.mjs`; `docs/DEVELOPMENT.md` (Planned restarts) |
+| Co-op lockstep and rooms; the lobby UI                | `src/game/client/coop/`, `ui/CoopScreen`                                                   |
+| Finding ids in the cache                              | `scripts/cache/`                                                                           |
+| ScapeRune: making maps that aren't in OSRS            | `src/game/scaperune/CLAUDE.md`                                                             |
+| What a frame costs, and what's culled                 | `docs/DEVELOPMENT.md`, `scripts/dev/`                                                      |
 
 `src/game/core/` has no DOM or rendering. The UI reads from `GameClient` and `GameStore`, and never
 changes the sim directly.
@@ -65,6 +66,8 @@ npx tsc --noEmit -p .      # type check
 npx prettier --write <files>
 npm run build && npm run slim-cache    # build for hosting (only when deploying)
 npm run serve              # serve the build, co-op's relay too (serve:singleplayer without)
+npm run server:drain -- --wait # on the server, wait for existing co-op runs before a restart
+npm run server:status       # local drain state; server:cancel reopens new games
 npm run desktop            # the Windows app, on that build
 npm run desktop:dist       # the app's zip, game zip and manifest, into release/
 ```

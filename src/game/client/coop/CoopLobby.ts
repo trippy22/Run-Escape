@@ -37,6 +37,8 @@ export type CoopView = {
     available?: boolean;
     // The relay lets players into rooms on maps they haven't unlocked
     anyMap: boolean;
+    draining: boolean;
+    endlessDeadline?: number;
 };
 
 export const OFFLINE: CoopView = {
@@ -48,6 +50,7 @@ export const OFFLINE: CoopView = {
     roomsFull: false,
     name: "",
     anyMap: false,
+    draining: false,
 };
 
 // How long to wait for the relay to say it's there
@@ -116,6 +119,7 @@ export class CoopLobby {
     private view: CoopView;
     // What this player looks like to the room, sent on joining and on change
     private me: Partial<Member> = {};
+    private runId?: string;
 
     onStart?: (game: GameStart) => void;
     onUp?: (from: string, message: UpMessage) => void;
@@ -123,6 +127,7 @@ export class CoopLobby {
     onLeft?: (id: string) => void;
     onGone?: (reason: GoneReason) => void;
     onClosed?: () => void;
+    onMaintenanceExit?: () => boolean;
 
     constructor(readonly store: GameStore) {
         this.view = OFFLINE;
@@ -184,9 +189,12 @@ export class CoopLobby {
                 }
                 const wasOnline = this.view.status === "online";
                 this.socket = undefined;
+                this.runId = undefined;
                 this.stopTimers();
                 this.update({
                     status: "offline",
+                    draining: false,
+                    endlessDeadline: undefined,
                     room: undefined,
                     you: undefined,
                     // A new one comes with the next connection
@@ -206,10 +214,13 @@ export class CoopLobby {
     close(): void {
         const socket = this.socket;
         this.socket = undefined;
+        this.runId = undefined;
         this.stopTimers();
         socket?.close();
         this.update({
             status: "offline",
+            draining: false,
+            endlessDeadline: undefined,
             room: undefined,
             you: undefined,
             name: "",
@@ -240,6 +251,8 @@ export class CoopLobby {
                     error: undefined,
                     available: true,
                     anyMap: message.anyMap === true,
+                    draining: message.draining === true,
+                    endlessDeadline: message.endlessDeadline,
                 });
                 this.refresh();
                 this.listTimer = window.setInterval(() => {
@@ -251,6 +264,23 @@ export class CoopLobby {
                     () => this.send({ t: "ping" }),
                     PING_INTERVAL_MS,
                 );
+                break;
+            case "maintenance":
+                this.update({
+                    draining: message.draining,
+                    endlessDeadline: message.endlessDeadline,
+                });
+                this.store.toast(
+                    message.draining
+                        ? message.endlessDeadline
+                            ? `Endless runs will end for maintenance at ${new Date(message.endlessDeadline).toLocaleTimeString()}. Earned progress will be kept.`
+                            : "Server maintenance is pending. Your current run can finish."
+                        : "Server maintenance cancelled. New runs are available again.",
+                    8000,
+                );
+                break;
+            case "maintenanceExit":
+                if (message.runId === this.runId && this.onMaintenanceExit?.()) this.finished();
                 break;
             case "named":
                 this.update({ name: message.name });
@@ -268,6 +298,7 @@ export class CoopLobby {
                 this.update({ room: message.room, you: message.you, error: undefined });
                 break;
             case "gone":
+                this.runId = undefined;
                 this.update({ room: undefined, error: GONE_TEXT[message.reason] || undefined });
                 this.refresh();
                 this.onGone?.(message.reason);
@@ -282,6 +313,7 @@ export class CoopLobby {
                 }
                 break;
             case "start":
+                this.runId = message.runId;
                 this.onStart?.(message.game);
                 break;
             case "up":
@@ -351,6 +383,7 @@ export class CoopLobby {
     }
 
     leave(): void {
+        this.runId = undefined;
         this.send({ t: "leave" });
         this.update({ room: undefined });
     }
@@ -383,6 +416,14 @@ export class CoopLobby {
     // Back in the lobby after a run
     end(): void {
         this.send({ t: "end" });
+    }
+
+    // Called after the final frame has been sent/applied and results recorded.
+    finished(): void {
+        if (this.runId) {
+            this.send({ t: "finished", runId: this.runId });
+            this.runId = undefined;
+        }
     }
 
     sendUp(message: UpMessage): void {

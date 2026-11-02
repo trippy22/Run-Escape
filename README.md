@@ -67,6 +67,9 @@ npm start
 
 and open http://localhost:5173.
 
+Hosting co-op? See [planned relay restarts](docs/DEVELOPMENT.md#planned-restarts) for local-only
+drain, status and cancel commands, including an optional grace period for endless runs.
+
 `npm run download-caches` fetches the game's cache (see [Cache version](#cache-version)) from the
 [OpenRS2 Archive](https://archive.openrs2.org/) into `caches/`; you can also copy a `caches/` folder
 over from another checkout. The first load copies the 227 MB cache into

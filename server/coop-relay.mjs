@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 
 import { clientAddress, proxyMode, viaProxy, watchCloudflareRanges } from "./client-ip.mjs";
 import { playerName, roomName } from "./name-gen.mjs";
+import { createAdminControl } from "./relay-admin.mjs";
 
 export const RELAY_PATH = "/coop";
 
@@ -567,6 +568,7 @@ export function createRelay(limits = {}) {
         anyMap = isAnyMapOn(),
         metrics = isMetricsOn(),
         metricsPort = metricsPortSetting(),
+        admin = true,
     } = limits;
     // Behind Cloudflare, its addresses, fetched from its API
     const stopCloudflare = proxy === "cloudflare" ? watchCloudflareRanges() : () => {};
@@ -587,6 +589,83 @@ export function createRelay(limits = {}) {
         : undefined;
     let metricsServer;
     let stopMetrics = () => {};
+    let adminControl;
+    let draining = false;
+    let nextRunId = 1;
+    let endlessGraceSeconds;
+    let endlessDeadline;
+    let endlessTimer;
+
+    function getDrainStatus() {
+        let activeRuns = 0;
+        let pendingPlayers = 0;
+        let endlessRuns = 0;
+        for (const room of rooms.values()) {
+            if (room.run?.pending.size) {
+                activeRuns++;
+                pendingPlayers += room.run.pending.size;
+                if (room.run.endless) endlessRuns++;
+            }
+        }
+        return {
+            draining,
+            ready: draining && activeRuns === 0,
+            activeRuns,
+            endlessRuns,
+            pendingPlayers,
+            rooms: rooms.size,
+            players: clients.size,
+            endlessGraceSeconds: endlessGraceSeconds ?? null,
+            endlessDeadline: endlessDeadline ?? null,
+        };
+    }
+
+    function maintenanceMessage() {
+        return { t: "maintenance", draining, endlessDeadline };
+    }
+
+    function checkEndlessDrain() {
+        if (!draining || endlessGraceSeconds === undefined || endlessDeadline !== undefined) return;
+        const status = getDrainStatus();
+        if (status.endlessRuns === 0 || status.activeRuns !== status.endlessRuns) return;
+        endlessDeadline = Date.now() + endlessGraceSeconds * 1000;
+        for (const client of clients) client.connection.send(maintenanceMessage());
+        endlessTimer = setTimeout(() => {
+            for (const room of rooms.values()) {
+                if (!room.run?.endless || !room.run.pending.size) continue;
+                room.started = false;
+                for (const member of room.members) {
+                    member.connection.send({ t: "maintenanceExit", runId: room.run.id });
+                }
+                broadcastRoom(room);
+            }
+        }, endlessGraceSeconds * 1000);
+        endlessTimer.unref?.();
+    }
+
+    function setDraining(value, options = {}) {
+        const seconds = options?.endlessGraceSeconds;
+        if (
+            seconds !== undefined &&
+            (!Number.isInteger(seconds) || seconds < 1 || seconds > 86400)
+        ) {
+            throw new Error("endlessGraceSeconds must be a whole number from 1 to 86400");
+        }
+        if (value && draining && seconds !== undefined && seconds !== endlessGraceSeconds) {
+            throw new Error("Cancel the current drain before changing the endless grace period");
+        }
+        if (draining !== value) {
+            draining = value;
+            clearTimeout(endlessTimer);
+            endlessDeadline = undefined;
+            endlessGraceSeconds = value ? seconds : undefined;
+            for (const client of clients) {
+                client.connection.send(maintenanceMessage());
+            }
+        }
+        checkEndlessDrain();
+        return getDrainStatus();
+    }
     // Every connected player's name, so no two have the same
     const playerNames = new Set();
     let nextId = 1;
@@ -621,6 +700,16 @@ export function createRelay(limits = {}) {
         const metric = (name, help, value, type = "gauge") =>
             `# HELP ${name} ${help}\n# TYPE ${name} ${type}\n${name} ${value}\n`;
         return [
+            metric(
+                "coop_draining",
+                "Whether new games are blocked for maintenance.",
+                Number(draining),
+            ),
+            metric(
+                "coop_drain_ready",
+                "Whether maintenance is waiting and all runs have finished.",
+                Number(getDrainStatus().ready),
+            ),
             metric(
                 "coop_uptime_seconds",
                 "Seconds since this relay started.",
@@ -813,6 +902,8 @@ export function createRelay(limits = {}) {
             return;
         }
         client.room = undefined;
+        room.run?.pending.delete(client.id);
+        checkEndlessDrain();
         client.ready = false;
         room.members = room.members.filter((member) => member !== client);
         if (reason) {
@@ -842,6 +933,7 @@ export function createRelay(limits = {}) {
 
     function disband(room, reason) {
         rooms.delete(room.code);
+        checkEndlessDrain();
         openRooms = undefined;
         for (const member of room.members) {
             member.room = undefined;
@@ -976,6 +1068,12 @@ export function createRelay(limits = {}) {
         }
         const isHost = room !== undefined && room.hostId === client.id;
         const error = (text) => client.connection.send({ t: "error", message: text });
+        if (draining && ["create", "join", "start"].includes(message.t)) {
+            error(
+                "Server maintenance is pending. Existing runs can finish; new runs will return afterward.",
+            );
+            return;
+        }
         switch (message.t) {
             case "ping":
                 client.connection.send({ t: "pong" });
@@ -1189,12 +1287,21 @@ export function createRelay(limits = {}) {
                         return;
                     }
                     room.started = true;
+                    room.run = {
+                        id: String(nextRunId++),
+                        endless: room.endless || message.game?.endless === true,
+                        pending: new Set(room.members.map((m) => m.id)),
+                    };
                     if (counters) {
                         counters.runsStarted++;
                     }
                     for (const member of room.members) {
                         member.ready = false;
-                        member.connection.send({ t: "start", game: message.game });
+                        member.connection.send({
+                            t: "start",
+                            game: message.game,
+                            runId: room.run.id,
+                        });
                     }
                     broadcastRoom(room);
                 }
@@ -1204,6 +1311,14 @@ export function createRelay(limits = {}) {
                 if (isHost && room.started) {
                     room.started = false;
                     broadcastRoom(room);
+                }
+                return;
+            case "finished":
+                // Only this member's acknowledgement, for this particular run.
+                // Keep waiting after the host returns to the lobby if a guest is still finishing.
+                if (room?.run && message.runId === room.run.id) {
+                    room.run.pending.delete(client.id);
+                    checkEndlessDrain();
                 }
                 return;
             // The game's own traffic, nearly all of what comes through, goes on
@@ -1304,7 +1419,14 @@ export function createRelay(limits = {}) {
         playerNames.add(client.name);
         // anyMap: the game shows rooms on maps the player hasn't got as locked
         // unless it's on
-        client.connection.send({ t: "welcome", id: client.id, name: client.name, anyMap });
+        client.connection.send({
+            t: "welcome",
+            id: client.id,
+            name: client.name,
+            anyMap,
+            draining,
+            endlessDeadline,
+        });
         if (head && head.length > 0) {
             client.connection.receive(head);
         }
@@ -1356,6 +1478,21 @@ export function createRelay(limits = {}) {
             });
             const localMetrics = startMetrics(path);
             server.once("close", stopMetrics);
+            if (admin && !adminControl) {
+                try {
+                    adminControl = createAdminControl({
+                        status: getDrainStatus,
+                        drain: (options) => setDraining(true, options),
+                        cancel: () => setDraining(false),
+                    });
+                    adminControl.ready.catch((error) =>
+                        console.error(`Relay admin unavailable: ${error.message}`),
+                    );
+                    server.once("close", () => adminControl.close());
+                } catch (error) {
+                    console.error(`Relay admin unavailable: ${error.message}`);
+                }
+            }
             return localMetrics;
         },
         handleUpgrade,
@@ -1385,11 +1522,16 @@ export function createRelay(limits = {}) {
         },
         // Closes idle rooms as if it were this time (for the tests)
         sweep,
+        beginDrain: (options) => setDraining(true, options),
+        cancelDrain: () => setDraining(false),
+        getDrainStatus,
         close() {
             clearInterval(pinger);
             clearInterval(sweeper);
             stopCloudflare();
             stopMetrics();
+            adminControl?.close();
+            clearTimeout(endlessTimer);
             for (const client of clients) {
                 client.connection.close(1001);
             }

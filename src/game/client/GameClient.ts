@@ -323,6 +323,7 @@ export class GameClient implements GameFrameHandler {
     // back, and shouldn't go twice)
     private autoAlchedUid = -1;
     private runRecorded = false;
+    private coopResultsRecorded = false;
     // Adventurers this run has done the task for, already told about
     private tasksAnnounced = new Set<string>();
     private attractTick = 0;
@@ -380,6 +381,7 @@ export class GameClient implements GameFrameHandler {
         this.coop.onLeft = (id) => this.toCoopRun((run) => run.playerLeft(id));
         this.coop.onGone = (reason) => this.onCoopGone(reason);
         this.coop.onClosed = () => this.onCoopClosed();
+        this.coop.onMaintenanceExit = () => this.onCoopMaintenanceExit();
         // Co-op's offered only where there's a relay to play it through
         this.coop.checkAvailable();
         document.addEventListener("visibilitychange", this.onVisibilityChange);
@@ -610,7 +612,19 @@ export class GameClient implements GameFrameHandler {
         }
     }
 
-    // A guest's run that can't go on: what was done counts, as if they'd quit
+    private onCoopMaintenanceExit(): boolean {
+        // A loading run must not begin after acknowledging its exit.
+        this.coopInbox = undefined;
+        if (!this.coopRun || !this.sim) return true;
+        if (!this.coopResultsRecorded) {
+            this.endCoopRunEarly(
+                "Your run ended for server maintenance. Your earned progress has been kept.",
+            );
+        }
+        return this.coopResultsRecorded;
+    }
+
+    // A run that can't go on: what was done counts, as if they'd quit
     private endCoopRunEarly(why: string): void {
         // Nothing more of it is stepped, frames still to come included
         this.coopStopped = true;
@@ -912,6 +926,7 @@ export class GameClient implements GameFrameHandler {
         }
         this.paused = false;
         this.runRecorded = false;
+        this.coopResultsRecorded = false;
         this.tasksAnnounced.clear();
         this.accumulator = 0;
         this.shownDps = 0;
@@ -1138,6 +1153,11 @@ export class GameClient implements GameFrameHandler {
     // to the room. show: false when the next run's starting straight away.
     leaveRun(show = true): void {
         const wasCoop = this.coopRun !== undefined;
+        if (show && this.coopRun && this.coopResultsRecorded) {
+            // Results can be dismissed before the next update sends the acknowledgement.
+            this.coopRun.flush(true);
+            this.coop.finished();
+        }
         if (wasCoop && show && this.coop.isHost) {
             // The room's open for the next run
             this.coop.end();
@@ -1228,6 +1248,7 @@ export class GameClient implements GameFrameHandler {
         });
         // The room sees this player's new unlocks and upgrades next run
         this.coop.setMe({ loadout: this.getLoadout(), unlocks: this.getUnlocks() });
+        this.coopResultsRecorded = true;
     }
 
     // A task or quest done mid-run: the adventurer or item joins, and the
@@ -1437,7 +1458,10 @@ export class GameClient implements GameFrameHandler {
             // Waiting on the host: no time to make up once it's back
             this.accumulator = Math.min(this.accumulator, TICK_MS);
         }
-        run.flush();
+        run.flush(sim.runOver);
+        if (sim.runOver && this.coopResultsRecorded) {
+            this.coop.finished();
+        }
         if (run.desynced && !this.runRecorded) {
             // Nothing brings the copies back together, so this one stops
             // rather than everyone waiting on it

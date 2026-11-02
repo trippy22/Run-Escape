@@ -194,6 +194,7 @@ The metrics are:
 - Peak gauges since startup: `coop_players_connected_peak` and `coop_rooms_peak`.
 - Uptime gauge: `coop_uptime_seconds`.
 - Configured limit gauges: `coop_connections_limit` and `coop_rooms_limit`.
+- Maintenance gauges: `coop_draining` and `coop_drain_ready` (0 or 1).
 
 For example, part of the response looks like this:
 
@@ -208,17 +209,17 @@ add this job to its `scrape_configs`:
 
 ```yaml
 scrape_configs:
-  - job_name: run_escape
-    scrape_interval: 15s
-    metrics_path: /coop/metrics
-    static_configs:
-      - targets: ["127.0.0.1:8788"]
+    - job_name: run_escape
+      scrape_interval: 15s
+      metrics_path: /coop/metrics
+      static_configs:
+          - targets: ["127.0.0.1:8788"]
 ```
 
 Adjust the target port or metrics path if you changed the settings above. Samples have no labels
 or explicit timestamps; Prometheus supplies scrape timestamps.
 
-Counts are in memory and reset on restart. Each GET reads the existing rooms once; totals and peaks
+Counts are in memory and reset on restart. Each GET scans the existing rooms; totals and peaks
 update only on connections, room creation and run starts. There is no background sampling, extra
 package, disk write or per-message tracking. Responses aren't cached. Refresh the URL for a live snapshot;
 if using a monitor, polling every 15–30 seconds is plenty for these counts.
@@ -229,6 +230,81 @@ run the request on the server (inside its container if applicable), or use an SS
 only controls the game/relay listener and cannot make metrics listen publicly.
 Metrics contain aggregate numbers only, with no player names, addresses or room codes. The public
 `/coop` availability response contains only `{"coop":true}`, so it doesn't expose aggregate counts.
+
+#### Planned restarts
+
+From the same installed checkout, on the server VM as the account running Node:
+
+```sh
+npm run server:status
+npm run server:drain -- --wait
+# After it says "Ready to restart", restart with your usual process manager.
+# To reopen games without restarting:
+npm run server:cancel
+```
+
+These commands also work with `npm start`, `npm run serve`, `npm run preview` and the standalone
+relay. They control the running process without restarting it. They remain available with metrics
+disabled, add no packages, and never stop Node, reboot the VM or invoke a process manager.
+Use `--json` on any command for a machine-readable status. `drain` without `--wait` returns
+immediately; `--wait` polls once a second and exits successfully only when ready. Cancellation,
+connection failure or an instance change exits unsuccessfully, so a restart can be chained to
+successful completion. Stopping the waiting CLI does **not** cancel the server's drain.
+
+Drain blocks room creation, joining and starting new runs on the relay itself. Existing games keep
+passing frames, and clients show a maintenance notice. Each run has an ID; each connected member
+acknowledges their own completion after recording results and flushing final frames. The host
+returning to the lobby alone is not enough. Players may remain on their results or in a lobby when
+status becomes ready. Disconnected or departed members no longer hold their room open. Drain stays
+enabled until cancelled or the process restarts, so a new run cannot slip in after readiness.
+
+**No forced timeout is enabled by default**, including for endless games. Optionally:
+
+```sh
+npm run server:drain -- --wait --endless-grace=300
+```
+
+The grace is a whole number of seconds from 1 to 86400. Its countdown starts only after every
+non-endless run has finished and acknowledged. Remaining endless parties see the exit time;
+after the grace, every member is asked to end the run using the existing early-exit save path.
+This keeps each client's earned progress without killing heroes or granting a victory. A client
+still loading cancels its start. The relay still waits for acknowledgements; the grace is **not**
+a deadline that forcibly drops sockets. `status` shows active/endless runs, pending players and
+the scheduled exit time. Cancel before expiry to stop the countdown; cancelling afterwards cannot
+resume an already-ended run. Cancel and drain again to change a grace period.
+
+Deploy the updated relay and clients before relying on this protocol. Old, modified, suspended or
+unresponsive clients may never acknowledge and can keep a drain pending until they leave. There is
+no guaranteed completion deadline without accepting disruption; no automatic kill fallback is
+included. Maintenance exits save the progress available on each browser, so a lagging guest can
+have slightly less progress than the host. Saves remain browser-local, with the normal storage
+failure limitations. A relay crash or forced restart still loses its in-memory rooms: this does not
+add session recovery or migration. The first deployment of this feature needs a normal restart.
+
+**Local access boundary.** Commands never use the public HTTP/WebSocket routes or the metrics
+listener. Unix uses a Unix domain socket inside a directory owned by the service account with mode
+0700; the socket and credential file use 0600. Windows uses raw TCP bound only to `127.0.0.1` on an
+ephemeral port and a random 256-bit key in a directory whose ACL allows only the current account
+and SYSTEM, with network logons denied. The key is loaded locally, never put in command-line
+arguments or HTTP headers. Windows requires its built-in Windows PowerShell for setting this ACL.
+Remote game clients and public reverse-proxy requests cannot issue these commands. A trusted
+operator can SSH into the VM as the service account and run them there. Local administrators/root,
+or code already running as that account, remain trusted; this cannot defend against a compromised
+server account.
+
+Control metadata lives under the OS temporary directory, named by account, checkout and
+`MULTIPLAYER_ADMIN_ID` (default `default`). If running multiple relays from one checkout as one
+account, set a different ID for each, and use the same ID, checkout and temp-directory environment
+in its CLI. With systemd `PrivateTmp` or containers, run the CLI in the service's namespace. Do not
+proxy the control socket, publish its Windows port, or share its credentials. Only three small
+commands are accepted; requests, concurrent connections and idle control sockets are bounded.
+There is no background game sampling and no per-frame metrics work.
+
+Startup refuses to overwrite a live instance's control file. A descriptor left by a stopped PID
+can be reclaimed; an ambiguous file, a reused PID or an interrupted recovery requires operator
+inspection. The error names the private directory: verify the old instance is stopped before
+removing stale `control.json`, `control.sock` or `recovery.lock`. If control setup fails, the server
+logs an error and co-op continues; it never falls back to public admin routes.
 
 ## Desktop
 

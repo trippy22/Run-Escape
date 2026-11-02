@@ -32,7 +32,7 @@ function CoopMenu({ ui, client }: Props): JSX.Element {
     const [code, setCode] = useState("");
     const [open, setOpen] = useState(false);
     const online = coop.status === "online";
-    const canJoin = online;
+    const canJoin = online && !coop.draining;
     // Rooms on maps this game hasn't got (a newer game's) can't be joined
     const rooms = coop.rooms.filter((listing) => MAP_BY_ID.has(listing.mapId));
     // Unless the relay takes anyone, a room on a map this player hasn't got
@@ -55,6 +55,12 @@ function CoopMenu({ ui, client }: Props): JSX.Element {
         <div className="ui-fill ui-center">
             <div className="ui-panel rs-border rs-background ui-coop">
                 <h2>Multiplayer</h2>
+                {coop.draining && (
+                    <p role="status" className="ui-coop-error">
+                        Server maintenance is pending. New rooms and runs are temporarily
+                        unavailable.
+                    </p>
+                )}
                 <p className="ui-subtle">
                     A run with up to {MAX_PARTY - 1} friends. Each of you brings your own
                     adventurer, skills and Armoury.
@@ -164,7 +170,7 @@ function CoopMenu({ ui, client }: Props): JSX.Element {
                             </span>
                             <button
                                 className="ui-button ui-button-small"
-                                disabled={!online || !!missing(listing.mapId, listing.endless)}
+                                disabled={!canJoin || !!missing(listing.mapId, listing.endless)}
                                 title={missing(listing.mapId, listing.endless)}
                                 onClick={() => client.joinRoom(listing.code)}
                             >
@@ -172,7 +178,7 @@ function CoopMenu({ ui, client }: Props): JSX.Element {
                             </button>
                         </div>
                     ))}
-                    {online && coop.rooms.length === 0 && (
+                    {online && !coop.draining && coop.rooms.length === 0 && (
                         <div className="ui-coop-empty">No open rooms right now. Make one!</div>
                     )}
                     {coop.status === "offline" && (
@@ -405,6 +411,11 @@ function CoopLobby({ ui, client, room }: Props & { room: RoomView }): JSX.Elemen
                         </div>
                     </div>
                 )}
+                {ui.coop.draining && (
+                    <p role="status" className="ui-coop-error">
+                        Server maintenance is pending. New runs will return afterward.
+                    </p>
+                )}
                 {ui.coop.error && <div className="ui-coop-error">{ui.coop.error}</div>}
             </div>
             <div className="ui-panel rs-border rs-background ui-select-bar">
@@ -457,7 +468,7 @@ function CoopLobby({ ui, client, room }: Props & { room: RoomView }): JSX.Elemen
                 {isHost && (
                     <button
                         className="ui-button ui-button-go ui-select-go"
-                        disabled={!everyoneReady}
+                        disabled={!everyoneReady || ui.coop.draining}
                         title={everyoneReady ? undefined : "Waiting for everyone to be ready"}
                         onClick={() => client.startCoopRun()}
                     >

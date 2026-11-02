@@ -189,6 +189,7 @@ describe("co-op relay", () => {
         anyMap: true,
         metrics: false,
         metricsPort: 0,
+        admin: false,
     };
 
     async function start(
@@ -253,6 +254,131 @@ describe("co-op relay", () => {
         }
         return { host, guests: others, code: room.code as string, name: room.name as string };
     }
+
+    describe("planned restarts", () => {
+        async function started(guests = 1, endless = false) {
+            const group = await party(guests);
+            group.host.send({ t: "settings", endless });
+            group.host.send({ t: "start", game: { endless } });
+            const { runId } = await group.host.next("start");
+            for (const guest of group.guests) await guest.next("start");
+            return { ...group, runId };
+        }
+
+        async function delivered(client: TestClient, message: Message) {
+            client.send(message);
+            client.send({ t: "ping" });
+            await client.next("pong");
+        }
+
+        it("blocks new games while forwarding the current run and waits for every member", async () => {
+            const {
+                host,
+                guests: [guest],
+                code,
+                runId,
+            } = await started();
+            expect(relay.beginDrain()).toMatchObject({
+                draining: true,
+                ready: false,
+                pendingPlayers: 2,
+            });
+            const browser = new TestClient(url);
+            clients.push(browser);
+            expect(await browser.next("welcome")).toMatchObject({ draining: true });
+            for (const message of [
+                { t: "create" },
+                { t: "join", code },
+                { t: "start", game: {} },
+            ]) {
+                browser.send(message);
+                expect((await browser.next("error")).message).toMatch(/maintenance/);
+            }
+            guest.send({ t: "up", d: { move: 1 } });
+            expect((await host.next("up")).d).toEqual({ move: 1 });
+            host.send({ t: "down", d: { frame: 9 } });
+            expect((await guest.next("down")).d).toEqual({ frame: 9 });
+            await delivered(host, { t: "end" });
+            expect(relay.getDrainStatus().pendingPlayers).toBe(2);
+            await delivered(host, { t: "finished", runId, id: "p2" });
+            await delivered(host, { t: "finished", runId });
+            await delivered(guest, { t: "finished", runId: "old-run" });
+            expect(relay.getDrainStatus()).toMatchObject({ ready: false, pendingPlayers: 1 });
+            await delivered(guest, { t: "finished", runId });
+            expect(relay.getDrainStatus()).toMatchObject({ ready: true, players: 3, rooms: 1 });
+            expect(relay.cancelDrain()).toMatchObject({ draining: false, ready: false });
+            host.send({ t: "start", game: {} });
+            const next = await host.next("start");
+            expect(next.runId).not.toBe(runId);
+            await delivered(host, { t: "finished", runId });
+            expect(relay.beginDrain().pendingPlayers).toBe(2);
+        });
+
+        it("does not accept admin commands through a player's connection", async () => {
+            const client = await connect();
+            await delivered(client, { t: "drain", endlessGraceSeconds: 1 });
+            expect(relay.getDrainStatus().draining).toBe(false);
+            relay.beginDrain();
+            await delivered(client, { t: "cancel" });
+            expect(relay.getDrainStatus()).toMatchObject({ draining: true, ready: true });
+        });
+
+        it("waits indefinitely by default and stops waiting for disconnected players", async () => {
+            const {
+                host,
+                guests: [guest],
+                runId,
+            } = await started(1, true);
+            expect(relay.beginDrain()).toMatchObject({
+                endlessRuns: 1,
+                endlessDeadline: null,
+                endlessGraceSeconds: null,
+            });
+            await delivered(host, { t: "finished", runId });
+            guest.socket.close();
+            await host.next("left");
+            expect(relay.getDrainStatus().ready).toBe(true);
+            expect(host.messages.some((m) => m.t === "maintenanceExit")).toBe(false);
+        });
+
+        it("starts the optional endless grace only after normal runs finish, then still waits for saves", async () => {
+            const normal = await started(0);
+            const endless = await started(1, true);
+            relay.beginDrain({ endlessGraceSeconds: 1 });
+            expect(relay.getDrainStatus()).toMatchObject({
+                activeRuns: 2,
+                endlessRuns: 1,
+                endlessDeadline: null,
+            });
+            await delivered(normal.host, { t: "end" });
+            expect(relay.getDrainStatus().endlessDeadline).toBeNull();
+            await delivered(normal.host, { t: "finished", runId: normal.runId });
+            expect(relay.getDrainStatus().endlessDeadline).toBeGreaterThan(Date.now());
+            expect(await endless.host.next("maintenanceExit")).toMatchObject({
+                runId: endless.runId,
+            });
+            expect(await endless.guests[0].next("maintenanceExit")).toMatchObject({
+                runId: endless.runId,
+            });
+            expect(relay.getDrainStatus()).toMatchObject({ ready: false, pendingPlayers: 2 });
+            expect(normal.host.messages.some((m) => m.t === "maintenanceExit")).toBe(false);
+            await delivered(endless.host, { t: "finished", runId: endless.runId });
+            await delivered(endless.guests[0], { t: "finished", runId: endless.runId });
+            expect(relay.getDrainStatus().ready).toBe(true);
+        });
+
+        it("cancels the countdown and validates deadlines without changing an existing drain", async () => {
+            const { host } = await started(0, true);
+            expect(() => relay.beginDrain({ endlessGraceSeconds: 0 })).toThrow(/whole number/);
+            expect(relay.getDrainStatus().draining).toBe(false);
+            relay.beginDrain({ endlessGraceSeconds: 1 });
+            expect(() => relay.beginDrain({ endlessGraceSeconds: 2 })).toThrow(/Cancel/);
+            expect(relay.cancelDrain().endlessDeadline).toBeNull();
+            await new Promise((resolve) => setTimeout(resolve, 1100));
+            expect(host.messages.some((m) => m.t === "maintenanceExit")).toBe(false);
+            expect(relay.getDrainStatus()).toMatchObject({ draining: false, activeRuns: 1 });
+        });
+    });
 
     it("puts players in a room by its code", async () => {
         const { host, code } = await party(1);
@@ -532,6 +658,8 @@ describe("co-op relay", () => {
             const values = parseMetrics(body);
             expect(values).toEqual({
                 coop_uptime_seconds: expect.any(Number),
+                coop_draining: 0,
+                coop_drain_ready: 0,
                 coop_players_connected: 0,
                 coop_players_browsing: 0,
                 coop_players_lobby: 0,
@@ -552,7 +680,7 @@ describe("co-op relay", () => {
             expect(body.endsWith("\n")).toBe(true);
             expect(body).not.toContain("\r");
             const lines = body.trimEnd().split("\n");
-            expect(lines).toHaveLength(51);
+            expect(lines).toHaveLength(57);
             for (const name of Object.keys(values)) {
                 const type = [
                     "coop_connections_total",

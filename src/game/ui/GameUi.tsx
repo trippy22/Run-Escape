@@ -1009,6 +1009,13 @@ function RunScreen({ ui, client }: ScreenProps): JSX.Element {
                 <TouchControls hud={hud} overlay={ui.overlay} client={client} />
             )}
             <div className="ui-toasts">
+                {ui.coop.draining && ui.coop.endlessDeadline && ui.coop.room && !ui.result && (
+                    <div className="ui-toast" role="status">
+                        Maintenance: this run ends at{" "}
+                        {new Date(ui.coop.endlessDeadline).toLocaleTimeString()}. Earned progress
+                        will be kept.
+                    </div>
+                )}
                 {ui.toasts.map((toast) => (
                     <div key={toast.id} className="ui-toast">
                         {toast.text}

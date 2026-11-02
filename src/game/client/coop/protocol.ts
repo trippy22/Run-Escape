@@ -129,13 +129,23 @@ export type ClientMessage =
     | { t: "disband" }
     | { t: "start"; game: GameStart }
     | { t: "end" }
+    | { t: "finished"; runId: string }
     | { t: "up"; d: UpMessage }
     | { t: "down"; d: DownMessage };
 
 export type ServerMessage =
     // name: the one the relay's given this player. anyMap: rooms take players
     // whatever maps they have.
-    | { t: "welcome"; id: string; name: string; anyMap?: boolean }
+    | {
+          t: "welcome";
+          id: string;
+          name: string;
+          anyMap?: boolean;
+          draining?: boolean;
+          endlessDeadline?: number;
+      }
+    | { t: "maintenance"; draining: boolean; endlessDeadline?: number }
+    | { t: "maintenanceExit"; runId: string }
     // This player's new name, after asking for one
     | { t: "named"; name: string }
     | { t: "pong" }
@@ -153,7 +163,7 @@ export type ServerMessage =
     | { t: "room"; room: RoomView; you: string }
     | { t: "gone"; reason: GoneReason }
     | { t: "error"; message: string; need?: MissingMap }
-    | { t: "start"; game: GameStart }
+    | { t: "start"; game: GameStart; runId?: string }
     | { t: "left"; id: string }
     | { t: "up"; from: string; d: UpMessage }
     | { t: "down"; d: DownMessage };

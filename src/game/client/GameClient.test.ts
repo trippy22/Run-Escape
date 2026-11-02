@@ -172,3 +172,101 @@ describe("auto alch", () => {
         expect(sim.coins).toBe(coins);
     });
 });
+
+describe("co-op maintenance", () => {
+    it("does not acknowledge a new run while clearing the previous run's results", () => {
+        const { client } = createClient(createSim(), false);
+        const finished = vi.fn();
+        const flush = vi.fn();
+        Object.assign(client, {
+            coopRun: { flush },
+            coopResultsRecorded: true,
+            coop: { finished, isHost: true },
+            assets: { dropPlayers() {}, setPlayerAppearance() {} },
+            audio: { stopMusic() {} },
+            grids: { get: () => ({ plane: 0 }) },
+            renderer: { setPlane() {}, setSmoothTerrain() {}, setBrightness() {} },
+            view: { reset() {} },
+            cameraRig: {},
+        });
+        // beginCoopRun has already received the next run's ID at this point.
+        client.leaveRun(false);
+        expect(finished).not.toHaveBeenCalled();
+        expect(flush).not.toHaveBeenCalled();
+    });
+
+    it("records earned progress once without killing players or granting a victory", () => {
+        const sim = createSim();
+        sim.coins = 123;
+        const { client, store } = createClient(sim, false);
+        delete (client as unknown as { finishRun?: unknown }).finishRun;
+        const persist = vi.fn();
+        Object.assign(client, {
+            coopRun: {},
+            coopResultsRecorded: false,
+            coop: { setMe: vi.fn() },
+            persist,
+            updateHud: vi.fn(),
+        });
+        const exit = () =>
+            (client as unknown as { onCoopMaintenanceExit(): boolean }).onCoopMaintenanceExit();
+        expect(exit()).toBe(true);
+        expect(persist).toHaveBeenCalledTimes(1);
+        expect(store.getSnapshot().result).toMatchObject({
+            coins: 123,
+            endedEarly: expect.stringContaining("maintenance"),
+        });
+        expect(sim.runOver).toBe(false);
+        const result = store.getSnapshot().result;
+        expect(exit()).toBe(true);
+        expect(persist).toHaveBeenCalledTimes(1);
+        expect(store.getSnapshot().result).toBe(result);
+    });
+
+    it.each([true, false])(
+        "flushes the final frames before acknowledging a saved run (host=%s)",
+        (isHost) => {
+            const sim = createSim();
+            sim.state = "dead";
+            const { client } = createClient(sim, false);
+            const events: string[] = [];
+            const run = {
+                isHost,
+                behind: 0,
+                canStep: () => false,
+                setMove: vi.fn(),
+                flush: () => events.push("flush"),
+            };
+            Object.assign(client, {
+                coop: { finished: () => events.push("finished") },
+                input: { getMoveVector: () => ({ x: 0, y: 0 }) },
+                accumulator: 0,
+                coopResultsRecorded: false,
+                getDecisionKey: () => "unchanged",
+                decisionKey: "unchanged",
+            });
+            const update = () =>
+                (
+                    client as unknown as { updateCoop(delta: number, sim: Sim, run: unknown): void }
+                ).updateCoop(0, sim, run);
+            update();
+            expect(events).toEqual(["flush"]);
+            Object.assign(client, { coopResultsRecorded: true });
+            update();
+            expect(events).toEqual(["flush", "flush", "finished"]);
+        },
+    );
+
+    it("cancels a loading run before acknowledging and leaves recorded results intact", () => {
+        const { client, store } = createClient(createSim(), false);
+        Object.assign(client, { coopInbox: [vi.fn()], coopRun: undefined });
+        const exit = () =>
+            (client as unknown as { onCoopMaintenanceExit(): boolean }).onCoopMaintenanceExit();
+        expect(exit()).toBe(true);
+        expect((client as unknown as { coopInbox?: unknown }).coopInbox).toBeUndefined();
+        Object.assign(client, { coopRun: {}, coopResultsRecorded: true });
+        store.set({ overlay: "victory" });
+        expect(exit()).toBe(true);
+        expect(store.getSnapshot().overlay).toBe("victory");
+    });
+});

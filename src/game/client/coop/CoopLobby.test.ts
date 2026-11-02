@@ -1,9 +1,51 @@
+// @vitest-environment jsdom
 import { MAX_LOADOUT_BYTES } from "../../../../server/coop-relay.mjs";
 import { getUpgradeLine } from "../../content/armoury";
 import { CASKET_GEAR } from "../../content/items";
 import { SHOP_UPGRADES } from "../../content/shop";
 import { LOCKABLE_ITEMS } from "../../content/unlocks";
-import { makeLoadout, parseRoomCode } from "./CoopLobby";
+import { createSave } from "../../core/save";
+import { GameStore } from "../GameStore";
+import { CoopLobby, makeLoadout, parseRoomCode } from "./CoopLobby";
+import { ServerMessage } from "./protocol";
+
+describe("maintenance protocol", () => {
+    it("only acknowledges the current run, after its maintenance exit succeeds", () => {
+        const lobby = new CoopLobby(new GameStore(createSave()));
+        const send = vi.fn();
+        Object.assign(lobby, { socket: { readyState: WebSocket.OPEN, send } });
+        const receive = (message: object) =>
+            (lobby as unknown as { receive(m: ServerMessage): void }).receive(
+                message as ServerMessage,
+            );
+        receive({ t: "start", runId: "2", game: {} });
+        lobby.onMaintenanceExit = vi.fn(() => false);
+        receive({ t: "maintenanceExit", runId: "1" });
+        expect(lobby.onMaintenanceExit).not.toHaveBeenCalled();
+        receive({ t: "maintenanceExit", runId: "2" });
+        expect(send).not.toHaveBeenCalled();
+        lobby.onMaintenanceExit = vi.fn(() => true);
+        receive({ t: "maintenanceExit", runId: "2" });
+        expect(send).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ t: "finished", runId: "2" }));
+        receive({ t: "maintenanceExit", runId: "2" });
+        lobby.finished();
+        expect(send).toHaveBeenCalledTimes(1);
+        expect(lobby.onMaintenanceExit).toHaveBeenCalledTimes(1);
+    });
+
+    it("updates and clears the maintenance notice on cancellation", () => {
+        const store = new GameStore(createSave());
+        const lobby = new CoopLobby(store);
+        const receive = (message: ServerMessage) =>
+            (lobby as unknown as { receive(m: ServerMessage): void }).receive(message);
+        receive({ t: "maintenance", draining: true, endlessDeadline: Date.now() + 300_000 });
+        expect(store.getSnapshot().coop.draining).toBe(true);
+        expect(store.getSnapshot().coop.endlessDeadline).toBeDefined();
+        receive({ t: "maintenance", draining: false });
+        expect(store.getSnapshot().coop.draining).toBe(false);
+        expect(store.getSnapshot().coop.endlessDeadline).toBeUndefined();
+    });
+});
 
 describe("room codes", () => {
     it("takes the code out of a pasted invite link", () => {
