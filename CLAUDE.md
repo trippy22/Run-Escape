@@ -66,7 +66,7 @@ npx tsc --noEmit -p .      # type check
 npx prettier --write <files>
 npm run build && npm run slim-cache    # build for hosting (only when deploying)
 npm run serve              # serve the build, co-op's relay too (serve:singleplayer without)
-npm run server:drain -- --wait # on the server, wait for existing co-op runs before a restart
+npm run server:drain -- --wait # Unix: wait for regular runs, then 5-minute grace for endless/fun
 npm run server:status       # local drain state; server:cancel reopens new games
 npm run desktop            # the Windows app, on that build
 npm run desktop:dist       # the app's zip, game zip and manifest, into release/

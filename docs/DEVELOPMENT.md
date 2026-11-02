@@ -233,7 +233,8 @@ Metrics contain aggregate numbers only, with no player names, addresses or room 
 
 #### Planned restarts
 
-From the same installed checkout, on the server VM as the account running Node:
+These operator commands currently support Unix servers (including Linux) only. From the same
+installed checkout, on the server VM as the account running Node:
 
 ```sh
 npm run server:status
@@ -246,6 +247,8 @@ npm run server:cancel
 These commands also work with `npm start`, `npm run serve`, `npm run preview` and the standalone
 relay. They control the running process without restarting it. They remain available with metrics
 disabled, add no packages, and never stop Node, reboot the VM or invoke a process manager.
+On Windows the relay does not start an admin listener, and the CLI reports that it is unsupported.
+Windows players can still join games and receive maintenance notices from a Unix relay.
 Use `--json` on any command for a machine-readable status. `drain` without `--wait` returns
 immediately; `--wait` polls once a second and exits successfully only when ready. Cancellation,
 connection failure or an instance change exits unsuccessfully, so a restart can be chained to
@@ -258,20 +261,26 @@ returning to the lobby alone is not enough. Players may remain on their results 
 status becomes ready. Disconnected or departed members no longer hold their room open. Drain stays
 enabled until cancelled or the process restarts, so a new run cannot slip in after readiness.
 
-**No forced timeout is enabled by default**, including for endless games. Optionally:
+**Default drain waits for all regular runs to finish, then gives endless and fun modes five
+minutes before requesting a maintenance exit.** Regular runs have no imposed deadline. Fun maps
+are included through their game's endless flag, even when the room's endless toggle is off.
+To choose a different grace or wait indefinitely:
 
 ```sh
-npm run server:drain -- --wait --endless-grace=300
+npm run server:drain -- --wait --endless-grace=600
+npm run server:drain -- --wait --endless-grace=0
 ```
 
-The grace is a whole number of seconds from 1 to 86400. Its countdown starts only after every
-non-endless run has finished and acknowledged. Remaining endless parties see the exit time;
+The grace defaults to 300 seconds. Use 1 to 86400 seconds, or 0 to disable maintenance exits.
+Its countdown starts only after every regular run has finished and acknowledged.
+Remaining endless and fun parties see the exit time;
 after the grace, every member is asked to end the run using the existing early-exit save path.
 This keeps each client's earned progress without killing heroes or granting a victory. A client
 still loading cancels its start. The relay still waits for acknowledgements; the grace is **not**
-a deadline that forcibly drops sockets. `status` shows active/endless runs, pending players and
+a deadline that forcibly drops sockets. `status` shows active/endless runs (including fun modes), pending players and
 the scheduled exit time. Cancel before expiry to stop the countdown; cancelling afterwards cannot
-resume an already-ended run. Cancel and drain again to change a grace period.
+resume an already-ended run. Cancel and drain again to change a grace period. Reissuing a drain
+without options preserves its current grace and does not extend the countdown.
 
 Deploy the updated relay and clients before relying on this protocol. Old, modified, suspended or
 unresponsive clients may never acknowledge and can keep a drain pending until they leave. There is
@@ -282,11 +291,10 @@ failure limitations. A relay crash or forced restart still loses its in-memory r
 add session recovery or migration. The first deployment of this feature needs a normal restart.
 
 **Local access boundary.** Commands never use the public HTTP/WebSocket routes or the metrics
-listener. Unix uses a Unix domain socket inside a directory owned by the service account with mode
-0700; the socket and credential file use 0600. Windows uses raw TCP bound only to `127.0.0.1` on an
-ephemeral port and a random 256-bit key in a directory whose ACL allows only the current account
-and SYSTEM, with network logons denied. The key is loaded locally, never put in command-line
-arguments or HTTP headers. Windows requires its built-in Windows PowerShell for setting this ACL.
+listener. Control uses a Unix domain socket inside a directory owned by the service account with
+mode 0700; the socket and credential file use 0600. Commands also require a random 256-bit key,
+loaded locally and never put in command-line arguments or HTTP headers. There is no TCP or
+Windows named-pipe fallback.
 Remote game clients and public reverse-proxy requests cannot issue these commands. A trusted
 operator can SSH into the VM as the service account and run them there. Local administrators/root,
 or code already running as that account, remain trusted; this cannot defend against a compromised
@@ -296,7 +304,7 @@ Control metadata lives under the OS temporary directory, named by account, check
 `MULTIPLAYER_ADMIN_ID` (default `default`). If running multiple relays from one checkout as one
 account, set a different ID for each, and use the same ID, checkout and temp-directory environment
 in its CLI. With systemd `PrivateTmp` or containers, run the CLI in the service's namespace. Do not
-proxy the control socket, publish its Windows port, or share its credentials. Only three small
+proxy the control socket or share its credentials. Only three small
 commands are accepted; requests, concurrent connections and idle control sockets are bounded.
 There is no background game sampling and no per-frame metrics work.
 

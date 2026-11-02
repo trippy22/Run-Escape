@@ -568,7 +568,7 @@ export function createRelay(limits = {}) {
         anyMap = isAnyMapOn(),
         metrics = isMetricsOn(),
         metricsPort = metricsPortSetting(),
-        admin = true,
+        admin = process.platform !== "win32",
     } = limits;
     // Behind Cloudflare, its addresses, fetched from its API
     const stopCloudflare = proxy === "cloudflare" ? watchCloudflareRanges() : () => {};
@@ -625,7 +625,7 @@ export function createRelay(limits = {}) {
     }
 
     function checkEndlessDrain() {
-        if (!draining || endlessGraceSeconds === undefined || endlessDeadline !== undefined) return;
+        if (!draining || !endlessGraceSeconds || endlessDeadline !== undefined) return;
         const status = getDrainStatus();
         if (status.endlessRuns === 0 || status.activeRuns !== status.endlessRuns) return;
         endlessDeadline = Date.now() + endlessGraceSeconds * 1000;
@@ -644,12 +644,9 @@ export function createRelay(limits = {}) {
     }
 
     function setDraining(value, options = {}) {
-        const seconds = options?.endlessGraceSeconds;
-        if (
-            seconds !== undefined &&
-            (!Number.isInteger(seconds) || seconds < 1 || seconds > 86400)
-        ) {
-            throw new Error("endlessGraceSeconds must be a whole number from 1 to 86400");
+        const seconds = options?.endlessGraceSeconds ?? (draining ? endlessGraceSeconds : 300);
+        if (!Number.isInteger(seconds) || seconds < 0 || seconds > 86400) {
+            throw new Error("endlessGraceSeconds must be a whole number from 0 to 86400");
         }
         if (value && draining && seconds !== undefined && seconds !== endlessGraceSeconds) {
             throw new Error("Cancel the current drain before changing the endless grace period");
@@ -1289,6 +1286,7 @@ export function createRelay(limits = {}) {
                     room.started = true;
                     room.run = {
                         id: String(nextRunId++),
+                        // Fun maps start endless even when the room's endless toggle is off.
                         endless: room.endless || message.game?.endless === true,
                         pending: new Set(room.members.map((m) => m.id)),
                     };

@@ -8,7 +8,28 @@ import { promisify } from "node:util";
 
 import { adminDirectory, createAdminControl, sendAdminCommand } from "./relay-admin.mjs";
 
-describe("local operator control", () => {
+it("rejects an empty grace flag instead of silently disabling maintenance exits", async () => {
+    await expect(
+        promisify(execFile)(
+            process.execPath,
+            [resolve("server/admin-cli.mjs"), "drain", "--endless-grace="],
+            { windowsHide: true },
+        ),
+    ).rejects.toMatchObject({ stderr: expect.stringContaining("Usage:") });
+});
+
+it.runIf(process.platform === "win32")(
+    "rejects admin control on Windows before accessing files",
+    () => {
+        expect(() => adminDirectory()).toThrow(/Windows is not supported/);
+        const directory = join(tmpdir(), `run-escape-admin-unsupported-${randomUUID()}`);
+        expect(() => createAdminControl({}, { directory })).toThrow(/Windows is not supported/);
+        expect(() => sendAdminCommand("status", { directory })).toThrow(/Windows is not supported/);
+        expect(existsSync(directory)).toBe(false);
+    },
+);
+
+describe.skipIf(process.platform === "win32")("local Unix operator control", () => {
     let directory: string;
     let control: ReturnType<typeof createAdminControl> | undefined;
     let state: {
@@ -33,10 +54,7 @@ describe("local operator control", () => {
         control?.close();
         control = undefined;
         // Only the exact directory created for this test, inside the OS temp directory.
-        expect(
-            resolve(directory).startsWith(resolve(tmpdir()) + "/") ||
-                resolve(directory).startsWith(resolve(tmpdir()) + "\\"),
-        ).toBe(true);
+        expect(resolve(directory).startsWith(resolve(tmpdir()) + "/")).toBe(true);
         rmSync(directory, { recursive: true, force: true });
     });
 
@@ -48,11 +66,7 @@ describe("local operator control", () => {
     async function raw(text: string): Promise<string> {
         const { endpoint } = JSON.parse(readFileSync(join(directory, "control.json"), "utf8"));
         return new Promise((resolveResponse, reject) => {
-            const socket = createConnection(
-                endpoint.path
-                    ? { path: endpoint.path }
-                    : { host: "127.0.0.1", port: endpoint.port },
-            );
+            const socket = createConnection({ path: endpoint.path });
             let response = "";
             socket.setEncoding("utf8");
             socket.on("connect", () => socket.write(text));
@@ -85,38 +99,15 @@ describe("local operator control", () => {
         expect((await sendAdminCommand("status", { directory })).status.ready).toBe(false);
     });
 
-    it("protects credentials with owner permissions and denies Windows network access", async () => {
+    it("protects the socket and credentials with owner-only permissions", async () => {
         await start();
-        if (process.platform === "win32") {
-            const script =
-                "$a = [System.IO.Directory]::GetAccessControl($args[0]); [pscustomobject]@{ protected = $a.AreAccessRulesProtected; rules = @($a.Access | ForEach-Object { [pscustomobject]@{ sid = $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value; type = $_.AccessControlType.ToString() } }); owner = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value } | ConvertTo-Json -Depth 4";
-            // Script path avoids shell interpolation of the temporary directory.
-            const scriptFile = join(directory, "check-acl.ps1");
-            writeFileSync(scriptFile, script);
-            const acl = JSON.parse(
-                execFileSync(
-                    "powershell.exe",
-                    ["-NoProfile", "-NonInteractive", "-File", scriptFile, directory],
-                    { encoding: "utf8", windowsHide: true },
-                ),
-            );
-            expect(acl.protected).toBe(true);
-            expect(acl.rules).toContainEqual({ sid: "S-1-5-2", type: "Deny" });
-            expect(
-                acl.rules
-                    .filter((r: { type: string }) => r.type === "Allow")
-                    .map((r: { sid: string }) => r.sid)
-                    .sort(),
-            ).toEqual([acl.owner, "S-1-5-18"].sort());
-        } else {
-            for (const path of [
-                directory,
-                join(directory, "control.json"),
-                join(directory, "control.sock"),
-            ]) {
-                expect(lstatSync(path).mode & 0o077).toBe(0);
-                expect(lstatSync(path).uid).toBe(process.getuid!());
-            }
+        for (const path of [
+            directory,
+            join(directory, "control.json"),
+            join(directory, "control.sock"),
+        ]) {
+            expect(lstatSync(path).mode & 0o077).toBe(0);
+            expect(lstatSync(path).uid).toBe(process.getuid!());
         }
     });
 
@@ -179,7 +170,9 @@ describe("local operator control", () => {
         await vi.waitFor(() => expect(commands.drain).toHaveBeenCalled());
         await run("cancel");
         await cancelled;
-        await expect(run("drain", "--endless-grace=0")).rejects.toMatchObject({
+        await run("drain", "--endless-grace=0");
+        expect(commands.drain).toHaveBeenLastCalledWith({ endlessGraceSeconds: 0 });
+        await expect(run("drain", "--endless-grace=-1")).rejects.toMatchObject({
             stderr: expect.stringContaining("Usage:"),
         });
     }, 15_000);

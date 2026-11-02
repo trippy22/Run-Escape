@@ -256,10 +256,10 @@ describe("co-op relay", () => {
     }
 
     describe("planned restarts", () => {
-        async function started(guests = 1, endless = false) {
+        async function started(guests = 1, endless = false, runEndless = endless) {
             const group = await party(guests);
             group.host.send({ t: "settings", endless });
-            group.host.send({ t: "start", game: { endless } });
+            group.host.send({ t: "start", game: { endless: runEndless } });
             const { runId } = await group.host.next("start");
             for (const guest of group.guests) await guest.next("start");
             return { ...group, runId };
@@ -323,16 +323,38 @@ describe("co-op relay", () => {
             expect(relay.getDrainStatus()).toMatchObject({ draining: true, ready: true });
         });
 
-        it("waits indefinitely by default and stops waiting for disconnected players", async () => {
+        it("defaults to five minutes for endless and fun runs after every regular player finishes", async () => {
+            const normal = await started(1);
+            await started(0, true);
+            // Fun maps set the game's endless flag without enabling the room toggle.
+            await started(0, false, true);
+            expect(relay.beginDrain()).toMatchObject({
+                activeRuns: 3,
+                endlessRuns: 2,
+                endlessGraceSeconds: 300,
+                endlessDeadline: null,
+            });
+            await delivered(normal.host, { t: "finished", runId: normal.runId });
+            expect(relay.getDrainStatus().endlessDeadline).toBeNull();
+            const before = Date.now();
+            await delivered(normal.guests[0], { t: "finished", runId: normal.runId });
+            const deadline = relay.getDrainStatus().endlessDeadline;
+            expect(deadline).toBeGreaterThanOrEqual(before + 300_000);
+            expect(deadline).toBeLessThanOrEqual(Date.now() + 300_000);
+            // Reissuing drain must not extend an already-running countdown.
+            expect(relay.beginDrain().endlessDeadline).toBe(deadline);
+        });
+
+        it("can explicitly wait indefinitely and stops waiting for disconnected players", async () => {
             const {
                 host,
                 guests: [guest],
                 runId,
             } = await started(1, true);
-            expect(relay.beginDrain()).toMatchObject({
+            expect(relay.beginDrain({ endlessGraceSeconds: 0 })).toMatchObject({
                 endlessRuns: 1,
                 endlessDeadline: null,
-                endlessGraceSeconds: null,
+                endlessGraceSeconds: 0,
             });
             await delivered(host, { t: "finished", runId });
             guest.socket.close();
@@ -341,13 +363,14 @@ describe("co-op relay", () => {
             expect(host.messages.some((m) => m.t === "maintenanceExit")).toBe(false);
         });
 
-        it("starts the optional endless grace only after normal runs finish, then still waits for saves", async () => {
+        it("exits both endless and fun parties after the grace, then still waits for saves", async () => {
             const normal = await started(0);
             const endless = await started(1, true);
+            const fun = await started(0, false, true);
             relay.beginDrain({ endlessGraceSeconds: 1 });
             expect(relay.getDrainStatus()).toMatchObject({
-                activeRuns: 2,
-                endlessRuns: 1,
+                activeRuns: 3,
+                endlessRuns: 2,
                 endlessDeadline: null,
             });
             await delivered(normal.host, { t: "end" });
@@ -360,18 +383,22 @@ describe("co-op relay", () => {
             expect(await endless.guests[0].next("maintenanceExit")).toMatchObject({
                 runId: endless.runId,
             });
-            expect(relay.getDrainStatus()).toMatchObject({ ready: false, pendingPlayers: 2 });
+            expect(await fun.host.next("maintenanceExit")).toMatchObject({ runId: fun.runId });
+            expect(relay.getDrainStatus()).toMatchObject({ ready: false, pendingPlayers: 3 });
             expect(normal.host.messages.some((m) => m.t === "maintenanceExit")).toBe(false);
             await delivered(endless.host, { t: "finished", runId: endless.runId });
             await delivered(endless.guests[0], { t: "finished", runId: endless.runId });
+            expect(relay.getDrainStatus().ready).toBe(false);
+            await delivered(fun.host, { t: "finished", runId: fun.runId });
             expect(relay.getDrainStatus().ready).toBe(true);
         });
 
         it("cancels the countdown and validates deadlines without changing an existing drain", async () => {
             const { host } = await started(0, true);
-            expect(() => relay.beginDrain({ endlessGraceSeconds: 0 })).toThrow(/whole number/);
+            expect(() => relay.beginDrain({ endlessGraceSeconds: -1 })).toThrow(/whole number/);
             expect(relay.getDrainStatus().draining).toBe(false);
             relay.beginDrain({ endlessGraceSeconds: 1 });
+            expect(relay.beginDrain().endlessGraceSeconds).toBe(1);
             expect(() => relay.beginDrain({ endlessGraceSeconds: 2 })).toThrow(/Cancel/);
             expect(relay.cancelDrain().endlessDeadline).toBeNull();
             await new Promise((resolve) => setTimeout(resolve, 1100));

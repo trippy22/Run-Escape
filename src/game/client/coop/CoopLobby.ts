@@ -273,8 +273,8 @@ export class CoopLobby {
                 this.store.toast(
                     message.draining
                         ? message.endlessDeadline
-                            ? `Endless runs will end for maintenance at ${new Date(message.endlessDeadline).toLocaleTimeString()}. Earned progress will be kept.`
-                            : "Server maintenance is pending. Your current run can finish."
+                            ? `Endless and fun runs will end for maintenance at ${new Date(message.endlessDeadline).toLocaleTimeString()}. Earned progress will be kept.`
+                            : "Server maintenance is pending. New runs are temporarily unavailable."
                         : "Server maintenance cancelled. New runs are available again.",
                     8000,
                 );

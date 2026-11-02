@@ -10,7 +10,7 @@ the version in the corner).
 - Put the game on your phone's home screen from your browser's menu: it gets its own icon and opens
   full screen.
 - Co-op servers provide lightweight Prometheus player and room counts locally by default, with an off switch.
-- Co-op servers can wait for games to finish before maintenance, with an optional warned exit for endless runs that keeps earned progress.
+- Co-op servers on Unix can wait for regular games to finish before maintenance, then give endless and fun runs five minutes to exit with earned progress kept.
 
 ## 0.21.0 - 2026-11-01
 

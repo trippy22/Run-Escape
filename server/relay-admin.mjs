@@ -1,7 +1,5 @@
 // Operator control never goes through HTTP, WebSocket, or the metrics listener.
-// Unix uses an owner-only socket directory. Windows uses loopback TCP plus an
-// access key in an ACL-protected directory (Windows pipes can be reached over SMB).
-import { execFileSync } from "node:child_process";
+// Unix only: an owner-only socket directory, with no TCP or named-pipe fallback.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
     chmodSync,
@@ -14,7 +12,7 @@ import {
     writeFileSync,
 } from "node:fs";
 import { createConnection, createServer } from "node:net";
-import { tmpdir, userInfo } from "node:os";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,10 +20,16 @@ const MAX_REQUEST = 1024;
 const MAX_RESPONSE = 4096;
 const REPO = resolve(fileURLToPath(import.meta.url), "../..");
 
+function requireUnix() {
+    if (process.platform === "win32")
+        throw new Error("Relay admin commands require a Unix server; Windows is not supported");
+}
+
 export function adminDirectory(env = process.env) {
+    requireUnix();
     const id = env.MULTIPLAYER_ADMIN_ID ?? "default";
     if (!/^[a-zA-Z0-9_-]{1,40}$/.test(id)) throw new Error("Invalid MULTIPLAYER_ADMIN_ID");
-    const owner = process.getuid?.() ?? userInfo().username;
+    const owner = process.getuid();
     const key = createHash("sha256").update(`${owner}:${REPO}:${id}`).digest("hex").slice(0, 16);
     return join(tmpdir(), `run-escape-admin-${key}`);
 }
@@ -34,10 +38,7 @@ function checkDirectory(directory) {
     const stat = lstatSync(directory);
     if (!stat.isDirectory() || stat.isSymbolicLink())
         throw new Error("Admin directory must be a real directory");
-    if (
-        process.platform !== "win32" &&
-        (stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0)
-    ) {
+    if (stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0) {
         throw new Error("Admin directory must belong to the server account with mode 0700");
     }
 }
@@ -49,22 +50,6 @@ function prepareDirectory(directory) {
         if (error.code !== "EEXIST") throw error;
     }
     checkDirectory(directory);
-    if (process.platform === "win32") {
-        // Set a fresh DACL before writing any key; never trust inherited access.
-        execFileSync(
-            "powershell.exe",
-            [
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                join(REPO, "server", "secure-admin-directory.ps1"),
-                directory,
-            ],
-            { windowsHide: true, stdio: "pipe", timeout: 10_000 },
-        );
-    }
 }
 
 function removeStaleControl(directory, credentialPath) {
@@ -87,19 +72,18 @@ function removeStaleControl(directory, credentialPath) {
         if (error.code !== "ESRCH") return false;
     }
     const socketPath = join(directory, "control.sock");
-    if (process.platform !== "win32") {
-        try {
-            if (!lstatSync(socketPath).isSocket()) return false;
-            unlinkSync(socketPath);
-        } catch (error) {
-            if (error.code !== "ENOENT") throw error;
-        }
+    try {
+        if (!lstatSync(socketPath).isSocket()) return false;
+        unlinkSync(socketPath);
+    } catch (error) {
+        if (error.code !== "ENOENT") throw error;
     }
     unlinkSync(credentialPath);
     return true;
 }
 
 export function createAdminControl(commands, { directory = adminDirectory() } = {}) {
+    requireUnix();
     prepareDirectory(directory);
     const credentialPath = join(directory, "control.json");
     // Exclusive creation prevents one relay instance from replacing another's control channel.
@@ -205,10 +189,8 @@ export function createAdminControl(commands, { directory = adminDirectory() } = 
         server.once("listening", () => {
             if (closed) return;
             try {
-                const address = server.address();
-                const endpoint =
-                    typeof address === "string" ? { path: address } : { port: address.port };
-                if (endpoint.path) chmodSync(endpoint.path, 0o600);
+                const endpoint = { path: server.address() };
+                chmodSync(endpoint.path, 0o600);
                 writeFileSync(
                     fd,
                     JSON.stringify({ version: 1, pid: process.pid, token, instance, endpoint }),
@@ -223,11 +205,7 @@ export function createAdminControl(commands, { directory = adminDirectory() } = 
             }
         });
     });
-    server.listen(
-        process.platform === "win32"
-            ? { host: "127.0.0.1", port: 0, signal: abort.signal }
-            : { path: join(directory, "control.sock"), signal: abort.signal },
-    );
+    server.listen({ path: join(directory, "control.sock"), signal: abort.signal });
     server.unref();
     return {
         ready,
@@ -243,34 +221,23 @@ export function createAdminControl(commands, { directory = adminDirectory() } = 
 }
 
 export function sendAdminCommand(command, { directory = adminDirectory(), options } = {}) {
+    requireUnix();
     checkDirectory(directory);
     const file = join(directory, "control.json");
     const stat = lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_RESPONSE)
         throw new Error("Invalid admin credentials file");
-    if (
-        process.platform !== "win32" &&
-        (stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0)
-    ) {
+    if (stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0) {
         throw new Error("Admin credentials must belong to the server account with mode 0600");
     }
     const credentials = JSON.parse(readFileSync(file, "utf8"));
     if (credentials.version !== 1 || typeof credentials.token !== "string")
         throw new Error("Invalid admin credentials");
     const endpoint = credentials.endpoint;
-    let target;
-    if (
-        process.platform === "win32" &&
-        Number.isInteger(endpoint?.port) &&
-        endpoint.port > 0 &&
-        endpoint.port <= 65535
-    ) {
-        target = { host: "127.0.0.1", port: endpoint.port };
-    } else if (process.platform !== "win32" && endpoint?.path === join(directory, "control.sock")) {
-        target = { path: endpoint.path };
-    } else throw new Error("Admin endpoint must be local");
+    if (endpoint?.path !== join(directory, "control.sock"))
+        throw new Error("Admin endpoint must be the local Unix socket");
     return new Promise((resolveResponse, reject) => {
-        const socket = createConnection(target);
+        const socket = createConnection({ path: endpoint.path });
         let buffer = "";
         socket.setEncoding("utf8");
         socket.setTimeout(5000, () => socket.destroy(new Error("Admin command timed out")));

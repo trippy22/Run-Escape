@@ -4,13 +4,14 @@ import { sendAdminCommand } from "./relay-admin.mjs";
 
 const [command, ...flags] = process.argv.slice(2);
 const graceFlag = flags.find((flag) => flag.startsWith("--endless-grace="));
-const grace =
-    graceFlag === undefined ? undefined : Number(graceFlag.slice("--endless-grace=".length));
+const graceText = graceFlag?.slice("--endless-grace=".length);
+const grace = graceText === undefined ? undefined : Number(graceText);
 if (
     !["drain", "cancel", "status"].includes(command) ||
     flags.some((flag) => !["--wait", "--json"].includes(flag) && flag !== graceFlag) ||
     ((flags.includes("--wait") || graceFlag) && command !== "drain") ||
-    (grace !== undefined && (!Number.isInteger(grace) || grace < 1 || grace > 86400))
+    (graceText !== undefined && !/^\d+$/.test(graceText)) ||
+    (grace !== undefined && (!Number.isInteger(grace) || grace < 0 || grace > 86400))
 ) {
     console.error(
         "Usage: node server/admin-cli.mjs drain [--wait] [--endless-grace=SECONDS] [--json] | cancel [--json] | status [--json]",
@@ -31,9 +32,9 @@ if (
                   ? `Accepting games: ${state.activeRuns} runs active`
                   : state.ready
                     ? "Ready to restart. Drain mode remains enabled; restart with your process manager."
-                    : `Draining: ${state.activeRuns} runs (${state.endlessRuns} endless), ${state.pendingPlayers} players still finishing` +
+                    : `Draining: ${state.activeRuns} runs (${state.endlessRuns} endless/fun), ${state.pendingPlayers} players still finishing` +
                       (state.endlessDeadline
-                          ? `; endless maintenance exit at ${new Date(state.endlessDeadline).toISOString()}`
+                          ? `; endless/fun maintenance exit at ${new Date(state.endlessDeadline).toISOString()}`
                           : "");
             if (text !== previous) console.log(text);
             previous = text;
