@@ -1,12 +1,13 @@
 import fs from "fs";
+import path from "node:path";
 
 import { CacheList, LoadedCache, XteaMap } from "../../src/mapviewer/Caches";
 import { CacheFiles } from "../../src/rs/cache/CacheFiles";
 import { CacheInfo, getLatestCache } from "../../src/rs/cache/CacheInfo";
 import { detectCacheType } from "../../src/rs/cache/CacheType";
 
-export function loadCacheInfos(): CacheInfo[] {
-    const json = fs.readFileSync("./caches/caches.json", "utf8");
+export function loadCacheInfos(root = "./caches"): CacheInfo[] {
+    const json = fs.readFileSync(path.join(root, "caches.json"), "utf8");
     return JSON.parse(json);
 }
 
@@ -21,13 +22,13 @@ export function loadCacheList(caches: CacheInfo[]): CacheList {
     };
 }
 
-export function loadCacheFiles(cache: CacheInfo): CacheFiles {
-    const cachePath = "./caches/" + cache.name + "/";
+export function loadCacheFiles(cache: CacheInfo, root = "./caches"): CacheFiles {
+    const cachePath = path.join(root, cache.name);
 
     const files = new Map<string, ArrayBuffer>();
 
     fs.readdirSync(cachePath).forEach((fileName: string) => {
-        const buffer = fs.readFileSync(cachePath + fileName);
+        const buffer = fs.readFileSync(path.join(cachePath, fileName));
 
         files.set(
             fileName,
@@ -38,9 +39,9 @@ export function loadCacheFiles(cache: CacheInfo): CacheFiles {
     return new CacheFiles(files);
 }
 
-export function loadCache(info: CacheInfo): LoadedCache {
-    const files = loadCacheFiles(info);
-    const xteas = loadXteas(info);
+export function loadCache(info: CacheInfo, root = "./caches"): LoadedCache {
+    const files = loadCacheFiles(info, root);
+    const xteas = loadXteas(info, root);
     return {
         info,
         type: detectCacheType(info),
@@ -49,9 +50,8 @@ export function loadCache(info: CacheInfo): LoadedCache {
     };
 }
 
-export function loadXteas(cache: CacheInfo): XteaMap {
-    const cachePath = "./caches/" + cache.name + "/";
-    const json = fs.readFileSync(cachePath + "keys.json", "utf8");
+export function loadXteas(cache: CacheInfo, root = "./caches"): XteaMap {
+    const json = fs.readFileSync(path.join(root, cache.name, "keys.json"), "utf8");
     const data: Record<string, number[]> = JSON.parse(json);
     return new Map(Object.keys(data).map((key) => [parseInt(key), data[key]]));
 }

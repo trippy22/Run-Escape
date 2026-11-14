@@ -3,6 +3,13 @@
 What's changed in Run Escape, newest first. The game shows this on its title screen too (click
 the version in the corner).
 
+## Unreleased
+
+### Added
+
+- A card generator that renders cache items on the Run Escape frame, with deck numbering,
+  optional foil and a shared vampire back.
+
 ## 0.30.0 - 2026-11-09
 
 ### Added

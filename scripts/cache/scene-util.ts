@@ -8,12 +8,12 @@ import { SceneBuilder } from "../../src/rs/scene/SceneBuilder";
 import { loadCache, loadCacheInfos } from "./load-util";
 
 // The game's pinned cache, loaded from ./caches (run scripts from the repo root)
-export function loadGameCache(): LoadedCache {
-    const cacheInfo = loadCacheInfos().find((c) => c.name === GAME_CACHE_NAME);
+export function loadGameCache(root = "./caches"): LoadedCache {
+    const cacheInfo = loadCacheInfos(root).find((c) => c.name === GAME_CACHE_NAME);
     if (!cacheInfo) {
-        throw new Error(`Cache ${GAME_CACHE_NAME} not found in caches/caches.json`);
+        throw new Error(`Cache ${GAME_CACHE_NAME} not found in ${root}/caches.json`);
     }
-    return loadCache(cacheInfo);
+    return loadCache(cacheInfo, root);
 }
 
 // A scene builder like the render workers use, for building collision and

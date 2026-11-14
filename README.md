@@ -115,6 +115,8 @@ bun run lint               # format everything with Prettier
 
 `scripts/game/simulate-run.ts` has a bot play full runs for balancing, and `scripts/cache/` has
 tools for finding NPCs, items, animations and scenery in the cache.
+Generate collectible card PNGs from the same cache with `bun run cards 841 22481 --foil`.
+The [card generator guide](scripts/cards/README.md) covers deck files, numbering and the library API.
 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) lists them all, with how the code is laid out and how
 to host a build.
 

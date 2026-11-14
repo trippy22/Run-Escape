@@ -45,6 +45,7 @@ function projectModel(
     xOffset: number,
     yOffset: number,
     zOffset: number,
+    scale = 1,
 ): boolean {
     if (model.verticesCount > screenX.length) {
         return false;
@@ -84,8 +85,8 @@ function projectModel(
         if (z <= 0) {
             z = 1;
         }
-        screenX[i] = (centerX + (x << 9) / z) | 0;
-        screenY[i] = (centerY + (y << 9) / z) | 0;
+        screenX[i] = (centerX + ((x << 9) / z) * scale) | 0;
+        screenY[i] = (centerY + ((y << 9) / z) * scale) | 0;
     }
     return true;
 }
@@ -241,8 +242,10 @@ function outlineAndShadow(pixels: Int32Array, width: number, height: number): vo
     }
 }
 
+type ItemRenderState = Pick<WorkerState, "objTypeLoader" | "objModelLoader" | "textureLoader">;
+
 // Stacks like coins have their own item (model and view) per stack size
-function getStackObjId(state: WorkerState, objId: number, count: number): number {
+function getStackObjId(state: ItemRenderState, objId: number, count: number): number {
     const objType = state.objTypeLoader.load(objId);
     let stackId = objId;
     if (objType.countObj && count > 1) {
@@ -296,7 +299,22 @@ export function renderItemIcon(state: WorkerState, objId: number, count: number)
     if (objId < 0) {
         return renderLocIcon(state, -objId);
     }
-    const pixels = new Int32Array(ICON_WIDTH * ICON_HEIGHT);
+    // The client centers item models at (16, 16) in a 36 × 32 sprite.
+    return renderItemModel(state, objId, count, ICON_WIDTH, ICON_HEIGHT, 16, 16, 1);
+}
+
+// Card art uses the same inventory pose and lighting on a larger, padded raster.
+export function renderItemModel(
+    state: ItemRenderState,
+    objId: number,
+    count: number,
+    width: number,
+    height: number,
+    centerX: number,
+    centerY: number,
+    scale: number,
+): Int32Array {
+    const pixels = new Int32Array(width * height);
     const stackId = getStackObjId(state, objId, count);
     const objType = state.objTypeLoader.load(stackId);
     const model = state.objModelLoader.getModel(stackId, 1);
@@ -304,12 +322,10 @@ export function renderItemIcon(state: WorkerState, objId: number, count: number)
         return pixels;
     }
 
-    Rasterizer2D.setRaster(pixels, ICON_WIDTH, ICON_HEIGHT);
-    Rasterizer2D.setClip(0, 0, ICON_WIDTH, ICON_HEIGHT);
+    Rasterizer2D.setRaster(pixels, width, height);
+    Rasterizer2D.setClip(0, 0, width, height);
     Rasterizer3D.setClip();
-    // The client centres item models at (16, 16), not in the middle of the
-    // 36 pixel wide sprite
-    Rasterizer3D.setViewport(16, 16);
+    Rasterizer3D.setViewport(centerX, centerY);
     Rasterizer3D.rasterGouraudLowRes = false;
     Rasterizer3D.rasterAlpha = 0;
 
@@ -326,13 +342,14 @@ export function renderItemIcon(state: WorkerState, objId: number, count: number)
             objType.offsetX2d,
             ((model.height / 2) | 0) + sin + objType.offsetY2d,
             cos + objType.offsetY2d,
+            scale,
         )
     ) {
         drawModel(model, (id) => state.textureLoader.getAverageHsl(id));
     }
 
     // The rasterizer writes plain RGB; mark everything drawn as opaque
-    outlineAndShadow(pixels, ICON_WIDTH, ICON_HEIGHT);
+    outlineAndShadow(pixels, width, height);
     for (let i = 0; i < pixels.length; i++) {
         if (pixels[i] !== 0) {
             pixels[i] |= 0xff000000;

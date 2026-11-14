@@ -8,6 +8,7 @@ export class ObjType extends Type {
     model?: number;
 
     name: string;
+    examine?: string;
 
     recolorFrom!: number[];
     recolorTo!: number[];
@@ -149,8 +150,7 @@ export class ObjType extends Type {
         } else if (opcode === 2) {
             this.name = this.readString(buffer);
         } else if (opcode === 3) {
-            // desc
-            this.readString(buffer);
+            this.examine = this.readString(buffer);
         } else if (opcode === 4) {
             this.zoom2d = buffer.readUnsignedShort();
         } else if (opcode === 5) {

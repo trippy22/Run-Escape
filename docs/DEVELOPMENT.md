@@ -1489,6 +1489,10 @@ A sound's samples are let go once it's first played and its `AudioBuffer` holds 
 
 ### Scripts
 
+Run `bun run cards 2415 --preview` to render a cache item as a collectible card with a looping
+gold foil preview. The [card generator guide](../scripts/cards/README.md) covers the TypeScript
+API, matte and foil finishes, the vampire back and numbered decks.
+
 All run from the repository root with `bun run tsx`:
 
 ```

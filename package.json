@@ -45,6 +45,7 @@
         "serve:singleplayer": "node server/serve.mjs",
         "lint": "prettier --write \"./**/*.{js,ts,jsx,tsx,css,md}\"",
         "download-caches": "node scripts/download-caches.cjs",
+        "cards": "tsx scripts/cards/cli.ts",
         "export-textures": "tsx scripts/cache/export-textures.ts",
         "export-height-map": "tsx scripts/cache/export-height-map.ts",
         "slim-cache": "tsx scripts/cache/slim-cache.ts",
